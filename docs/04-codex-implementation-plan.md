@@ -2,6 +2,45 @@
 
 Tài liệu này mô tả thứ tự làm feature tracking. Không nhảy cóc sang dashboard trước khi event pipeline ổn định.
 
+## Source tham khảo bắt buộc
+
+Codex phải đọc các source dưới đây trước khi code:
+
+1. Umami browser tracker:
+   https://github.com/umami-software/umami/blob/de474a1da915d4666768cad0af0bed5b3449d661/src/tracker/index.ts
+
+   Dùng để đối chiếu:
+   - custom event `name` + `data`;
+   - click event delegation;
+   - xử lý anchor navigation sau khi event được gửi;
+   - `fetch(..., { keepalive: true })`;
+   - visitor identity và payload browser.
+
+2. Umami event ingest route:
+   https://github.com/umami-software/umami/blob/de474a1da915d4666768cad0af0bed5b3449d661/src/app/api/send/route.ts
+
+   Dùng để đối chiếu:
+   - validate payload ở backend;
+   - tách event / identify;
+   - tạo và cập nhật session;
+   - lưu distinct ID;
+   - bot detection;
+   - server-side enrichment browser/device/location;
+   - lưu event vào storage ở backend.
+
+3. PostHog JS autocapture:
+   https://github.com/PostHog/posthog-js/blob/48b1a0ce7f914a8dc15dc2c58fe6802954a917bb/packages/browser/src/autocapture.ts
+
+   Dùng để đối chiếu:
+   - listener `click`, `change`, `submit` theo capture phase;
+   - lấy target và ancestor chain;
+   - event properties;
+   - external click URL;
+   - tránh capture dữ liệu nhạy cảm;
+   - cuối pipeline gọi `capture(eventName, props)`.
+
+Các source này là reference pattern, không phải yêu cầu copy nguyên kiến trúc của Umami/PostHog.
+
 ## Phase 0 — Đọc codebase
 
 Codex phải xác định trước:
@@ -30,6 +69,10 @@ Mỗi browser có `visitor_id`, mỗi phiên có `session_id`.
 - Cookie phải có cấu hình bảo mật phù hợp môi trường production.
 - Nếu user login, backend tự lấy `user_id` từ auth context.
 - Không nhận `user_id` do frontend khai báo làm dữ liệu tin cậy.
+
+### Dẫn chứng repo mẫu
+
+Umami `src/tracker/index.ts` đưa identity vào payload qua trường `id`. Backend `src/app/api/send/route.ts` tạo `sessionId`, lưu `distinctId` và có luồng `identify` để link session với identity. Campe dùng ý tưởng tương tự nhưng giữ riêng `visitor_id`, `session_id`, `user_id`.
 
 ### Acceptance test
 
@@ -73,6 +116,10 @@ Response gợi ý:
   ]
 }
 ```
+
+### Dẫn chứng repo mẫu
+
+Umami ingest route validate payload bằng schema trước khi xử lý rồi mới phân loại và lưu event. Campe áp dụng cùng nguyên tắc: search event phải được validate và ghi ở backend, không phụ thuộc event JS analytics.
 
 ### Cần phân biệt
 
@@ -128,7 +175,16 @@ Khi user click product card:
 1. tạo `event_id`;
 2. gửi event;
 3. không làm UX chậm đáng kể;
-4. có thể dùng `sendBeacon`/`fetch keepalive` nếu route chuyển trang ngay, nhưng backend vẫn là nơi lưu chuẩn.
+4. có thể dùng `sendBeacon` hoặc `fetch keepalive` nếu route chuyển trang ngay, nhưng backend vẫn là nơi lưu chuẩn.
+
+### Dẫn chứng repo mẫu
+
+- Umami `handleClicks()` dùng event delegation qua `document.addEventListener('click', ..., true)` và tìm phần tử gần nhất có tracking attribute.
+- Khi click link nội bộ, Umami tạm ngăn navigation, gửi event, rồi mới chuyển trang.
+- Umami `send()` dùng `fetch` với `keepalive: true` để tăng khả năng event được gửi khi trang chuẩn bị unload.
+- PostHog `autocapture.ts` cũng gắn listener ở capture phase và cuối pipeline gọi `capture(eventName, props)`.
+
+Campe không cần autocapture toàn DOM. Chỉ track product card, compare action và affiliate action có chủ đích.
 
 ### Acceptance test
 
@@ -163,6 +219,10 @@ create affiliate_click_event
 return HTTP 302/303 redirect
 ```
 
+### Dẫn chứng repo mẫu
+
+PostHog autocapture có logic nhận biết external URL và đưa URL đó vào event properties. Umami tracker cũng xử lý riêng click vào anchor để đảm bảo event được gửi trước navigation. Campe dùng cùng tư tưởng nhưng với affiliate thì mạnh hơn: redirect phải đi qua backend để event được ghi trước khi rời site.
+
 ### Bảo mật
 
 - Không nhận `target_url` tùy ý từ query string.
@@ -196,6 +256,10 @@ Ví dụ rule:
 - admin/dev IP hoặc account;
 - tốc độ request bất thường;
 - cùng visitor spam affiliate redirect quá nhanh.
+
+### Dẫn chứng repo mẫu
+
+Umami backend dùng `isbot(userAgent)` trước khi ghi analytics event và có cả IP block check. Campe có thể học pattern này nhưng không nên xóa raw event ngay: nên đánh dấu `is_bot`/`is_internal` để vẫn audit được.
 
 Không xóa dữ liệu ngay. Đánh dấu rồi loại khỏi dashboard mặc định.
 
@@ -292,6 +356,7 @@ test: cover tracking event pipeline
 
 # Checklist hoàn tất feature
 
+- [ ] Codex đã đọc 3 source repo mẫu ở đầu tài liệu.
 - [ ] Raw keyword không bị mất.
 - [ ] Zero-result keyword được lưu.
 - [ ] Search impressions được lưu theo ranking position.
